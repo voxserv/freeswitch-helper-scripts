@@ -4,7 +4,30 @@ FreeSWITCH helper scripts
 This is a collection of scripts which can be used with FreeSWITCH servers.
 
 
+Installing the ESL module for Perl
+----------------------------------
+#ESL client library is not available in a package, so
+# we get the whole source and build only the Perl module
 
+```
+apt-get install -y autoconf automake devscripts gawk g++ git-core \
+ libjpeg-dev libncurses5-dev libtool make python-dev gawk pkg-config \
+ libtiff5-dev libperl-dev libgdbm-dev libdb-dev gettext libssl-dev \
+ libcurl4-openssl-dev libpcre3-dev libspeex-dev libspeexdsp-dev \
+ libsqlite3-dev libedit-dev libldns-dev libpq-dev \
+ libxml2-dev libpcre3-dev libcurl4-openssl-dev libgmp3-dev libaspell-dev\
+ python-dev php5-dev libonig-dev libqdbm-dev libedit-dev
+
+
+cd /usr/src
+git clone -b v1.4 https://freeswitch.org/stash/scm/fs/freeswitch.git
+cd /usr/src/freeswitch
+./bootstrap.sh -j
+./configure 
+cd /usr/src/freeswitch/libs/esl
+make
+make perlmod-install
+```
 
 
 

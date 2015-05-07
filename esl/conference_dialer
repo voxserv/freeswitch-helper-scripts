@@ -1,0 +1,204 @@
+#!/usr/bin/perl
+
+# This script dials out to specified destinations, and then puts them
+# all in a conference. The users hear siilence before they are joined to
+# the conference, so that automatic voice quality tools are not
+# confused. The script aborts all calls if one of the called
+# destinations fails.
+
+# Usage example:
+
+
+
+
+
+use strict;
+use warnings;
+use Getopt::Long;
+use ESL;
+use Time::HiRes qw(usleep);
+use POSIX;
+
+$| = 1;
+
+my $fs_host = '127.0.0.1';
+my $fs_port = 8021;
+my $fs_password = 'ClueCon';
+
+
+my $callerid = '13115552368';
+my $confprofile = 'default';
+my $verbose;
+
+my $help_needed;
+
+my $ok = GetOptions
+    (
+     'fs_host=s'     => \$fs_host,
+     'fs_port=s'     => \$fs_port,
+     'fs_password=s' => \$fs_password,
+     'cid=s'         => \$callerid,
+     'profile=s'     => \$confprofile,
+     'verbose'       => \$verbose,
+     'help'          => \$help_needed,
+    );
+
+
+if( not $ok or $help_needed or scalar(@ARGV) < 2 )
+{
+    print STDERR "Usage: $0 DIALSTR DIALSTR ...\n",
+    "Options:\n",
+    "  --fs_host=HOST    \[$fs_host\] FreeSWITCH host\n",
+    "  --fs_port=PORT    \[$fs_port\] FreeSWITCH ESL port\n",
+    "  --fs_password=PW  \[$fs_password\] FreeSWITCH ESL password\n",
+    "  --cid=NUMBER      \[$callerid\] caller ID\n",
+    "  --profile=NAME    \[$confprofile\] conference profile name\n",
+    "  --verbose         print extra info to STDERR\n",
+    "  --help            this help message\n",
+    "DIALSTR is any valid FreeSWITCH dial-string.\n",
+    "Minimum two dial strings are required.\n";
+    exit 1;
+}
+
+
+my @channels;
+foreach my $dialstring (@ARGV)
+{
+    push(@channels, {'dialstring' => $dialstring});
+}
+
+
+my $esl = new ESL::ESLconnection($fs_host,
+                                 sprintf('%d', $fs_port),
+                                 $fs_password);
+
+$esl->connected() or die("Cannot connect to FreeSWITCH");
+info("Connected to $fs_host:$fs_port");
+
+
+
+foreach my $channel (@channels)
+{
+    my $uuid = $esl->api('create_uuid')->getBody();
+    info("Created UUID: $uuid");
+    $channel->{'uuid'} = $uuid;
+
+    my $ds = $channel->{'dialstring'};
+    info('Calling ' . $ds);
+
+    $esl->bgapi(
+        'originate ' .
+        '{ignore_early_media=true,' .
+        'origination_uuid=' . $uuid . ',' . 
+        'originate_timeout=15,' .
+        'origination_caller_id_number=' . $callerid . ',' .
+        'origination_caller_id_name=' . $callerid . '}' .
+        $ds .
+        ' &park()');
+}
+
+# wait for everyone to answer
+my $timeout = time() + 20;
+my $all_connected = 0;
+my $abort = 0;
+
+while(not $all_connected and not $abort and time() < $timeout)
+{
+    usleep(500000);
+    foreach my $channel (@channels)
+    {
+        my $uuid = $channel->{'uuid'};
+        my $val = $esl->api('uuid_exists ' . $uuid)->getBody();
+        if( $val ne 'true' )
+        {
+            $abort = 1;
+            delete $channel->{'uuid'};
+            err('Failed to originate ' . $channel->{'dialstring'});            
+        }
+        elsif( not $channel->{'answered'} )
+        {
+            $val = $esl->api('eval uuid:' . $uuid .
+                             ' ${Channel-Call-State}')->getBody();
+            info($val . ' ' . $channel->{'dialstring'});
+            if( $val eq 'ACTIVE' )
+            {
+                $channel->{'answered'} = 1;
+                info('Call answered: ' . $channel->{'dialstring'});
+            }
+        }
+    }
+
+    if( not $abort )
+    {
+        $all_connected = 1;
+        foreach my $channel (@channels)
+        {
+            if( not $channel->{'answered'} )
+            {
+                $all_connected = 0;
+                last;
+            }
+        }
+    }        
+}
+
+if( $abort or not $all_connected )
+{
+    err('Failed to originate for all destinations, aborting');
+    
+    foreach my $channel (@channels)
+    {
+        if( defined($channel->{'uuid'}) )
+        {
+            info('Hanging up ' . $channel->{'dialstring'});
+            $esl->bgapi('uuid_kill ' . $channel->{'uuid'});
+        }
+    }
+}
+else
+{
+    my $confname = 'dialer_' . sprintf('%.6d', rand(10e5));
+    info('Starting conference: ' . $confname);
+    
+    foreach my $channel (@channels)
+    {
+        my $uuid = $channel->{'uuid'};
+        my $val = $esl->api
+            ('uuid_broadcast ' . $uuid . ' conference!::' .
+             $confname . '@' . $confprofile .
+             '++flags{mintwo|nomoh|moderator} aleg')->getBody();
+    }
+}
+
+
+$esl->disconnect();
+info("Finished");
+
+exit($ok?0:1);
+           
+
+
+sub printlog
+{
+    my ($time_epoch, $time_hires) = Time::HiRes::gettimeofday();
+    print STDERR
+        sprintf("%s.%.6d: ",
+                POSIX::strftime('%Y-%m-%d %H:%M:%S',
+                                localtime($time_epoch)),
+                $time_hires),
+        @_, "\n";
+}
+    
+sub info
+{
+    if( $verbose )
+    {
+        printlog(@_);
+    }
+}
+
+sub err
+{
+    printlog('ERROR: ', @_);
+}
+    
