@@ -6,8 +6,9 @@ This is a collection of scripts which can be used with FreeSWITCH servers.
 
 Installing the ESL module for Perl
 ----------------------------------
-#ESL client library is not available in a package, so
-# we get the whole source and build only the Perl module
+
+ESL client library is not available in a package, so we get the whole
+source and build only the Perl module
 
 ```
 apt-get install -y autoconf automake devscripts gawk g++ git-core \
