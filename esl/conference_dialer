@@ -163,10 +163,10 @@ else
     foreach my $channel (@channels)
     {
         my $uuid = $channel->{'uuid'};
-        my $val = $esl->api
+        $esl->bgapi
             ('uuid_broadcast ' . $uuid . ' conference!::' .
              $confname . '@' . $confprofile .
-             '++flags{mintwo|nomoh|moderator} aleg')->getBody();
+             '++flags{mintwo|nomoh|moderator} aleg');
     }
 }
 
