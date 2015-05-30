@@ -56,15 +56,18 @@ if( not $ok or $help_needed or scalar(@ARGV) < 2 )
     "  --verbose         print extra info to STDERR\n",
     "  --help            this help message\n",
     "DIALSTR is any valid FreeSWITCH dial-string.\n",
-    "Minimum two dial strings are required.\n";
+    "Minimum two dial-strings are required.\n",
+    "The first dial-string is treated as conference speaker and is \n",
+    "connected after all other legs are established\n";
     exit 1;
 }
 
 
-my @channels;
+my $speaker = {'dialstring' => shift(@ARGV)};
+my @listeners;
 foreach my $dialstring (@ARGV)
 {
-    push(@channels, {'dialstring' => $dialstring});
+    push(@listeners, {'dialstring' => $dialstring});
 }
 
 
@@ -77,19 +80,23 @@ info("Connected to $fs_host:$fs_port");
 
 
 
-foreach my $channel (@channels)
+foreach my $channel ($speaker, @listeners)
 {
+    my $ds = $channel->{'dialstring'};
     my $uuid = $esl->api('create_uuid')->getBody();
-    info("Created UUID: $uuid");
+    info("Created UUID for $ds: $uuid");
     $channel->{'uuid'} = $uuid;
+}
 
+foreach my $channel (@listeners)
+{
     my $ds = $channel->{'dialstring'};
     info('Calling ' . $ds);
 
     $esl->bgapi(
         'originate ' .
         '{ignore_early_media=true,' .
-        'origination_uuid=' . $uuid . ',' . 
+        'origination_uuid=' . $channel->{'uuid'} . ',' . 
         'originate_timeout=15,' .
         'origination_caller_id_number=' . $callerid . ',' .
         'origination_caller_id_name=' . $callerid . '}' .
@@ -104,8 +111,8 @@ my $abort = 0;
 
 while(not $all_connected and not $abort and time() < $timeout)
 {
-    usleep(500000);
-    foreach my $channel (@channels)
+    usleep(200000);
+    foreach my $channel (@listeners)
     {
         my $uuid = $channel->{'uuid'};
         my $val = $esl->api('uuid_exists ' . $uuid)->getBody();
@@ -131,7 +138,7 @@ while(not $all_connected and not $abort and time() < $timeout)
     if( not $abort )
     {
         $all_connected = 1;
-        foreach my $channel (@channels)
+        foreach my $channel (@listeners)
         {
             if( not $channel->{'answered'} )
             {
@@ -145,8 +152,9 @@ while(not $all_connected and not $abort and time() < $timeout)
 if( $abort or not $all_connected )
 {
     err('Failed to originate for all destinations, aborting');
+    $ok = 0;
     
-    foreach my $channel (@channels)
+    foreach my $channel (@listeners)
     {
         if( defined($channel->{'uuid'}) )
         {
@@ -157,17 +165,85 @@ if( $abort or not $all_connected )
 }
 else
 {
-    my $confname = 'dialer_' . sprintf('%.6d', rand(10e5));
+    my $confname = 'dialer_' . sprintf('%.6d', rand(10e5));        
     info('Starting conference: ' . $confname);
+    my $confargs = 
+        $confname . '@' . $confprofile . '++flags{mintwo|nomoh|moderator}';
     
-    foreach my $channel (@channels)
+    foreach my $channel (@listeners)
     {
         my $uuid = $channel->{'uuid'};
         $esl->bgapi
             ('uuid_broadcast ' . $uuid . ' conference!::' .
-             $confname . '@' . $confprofile .
-             '++flags{mintwo|nomoh|moderator} aleg');
+             $confargs . ' aleg');
     }
+
+    my $ds = $speaker->{'dialstring'};
+    info('Calling speaker: ' . $ds);
+    my $uuid = $speaker->{'uuid'};
+
+    $esl->bgapi(
+        'originate ' .
+        '{ignore_early_media=true,' .
+        'origination_uuid=' . $uuid . ',' . 
+        'originate_timeout=10,' .
+        'origination_caller_id_number=' . $callerid . ',' .
+        'origination_caller_id_name=' . $callerid . '}' .
+        $ds .
+        ' &conference(' . $confargs . ')');
+
+    while(not $speaker->{'answered'} and not $abort and time() < $timeout)
+    {
+        usleep(200000);
+        my $val = $esl->api('uuid_exists ' . $uuid)->getBody();
+        if( $val ne 'true' )
+        {
+            $abort = 1;
+            err('Failed to originate ' . $ds);            
+        }
+        else
+        {
+            $val = $esl->api('eval uuid:' . $uuid .
+                             ' ${Channel-Call-State}')->getBody();
+            info($val . ' ' . $speaker->{'dialstring'});
+            if( $val eq 'ACTIVE' )
+            {
+                $speaker->{'answered'} = 1;
+                info('Call answered: ' . $speaker->{'dialstring'});
+            }
+        }
+    }
+
+    my $session_limit = time() + 7200;
+    while( not $abort and time() < $session_limit )
+    {
+        sleep(10);
+        my $val = $esl->api('uuid_exists ' . $uuid)->getBody();
+        if( $val ne 'true' )
+        {
+            $abort = 1;
+        }
+        else
+        {
+            $val = $esl->api('eval uuid:' . $uuid .
+                             ' ${Channel-Call-State}')->getBody();
+            info($val . ' ' . $speaker->{'dialstring'});
+            if( $val ne 'ACTIVE' )
+            {
+                $abort = 1;
+            }
+        }
+    }
+    
+    info('Speaker call finished, hanging up all listeners');
+
+    foreach my $channel ($speaker, @listeners)
+    {
+        if( defined($channel->{'uuid'}) )
+        {
+            $esl->bgapi('uuid_kill ' . $channel->{'uuid'});
+        }
+    }    
 }
 
 
