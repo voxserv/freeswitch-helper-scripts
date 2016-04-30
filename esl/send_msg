@@ -1,0 +1,104 @@
+#!/usr/bin/perl
+
+
+
+use strict;
+use warnings;
+use Getopt::Long;
+use ESL;
+
+$| = 1;
+
+my $fs_host = '127.0.0.1';
+my $fs_port = 8021;
+my $fs_password = 'ClueCon';
+
+
+my $callerid = '13115552368';
+my $dest;
+my $msgtext;
+my $profile = 'internal';
+
+my $verbose;
+
+my $help_needed;
+
+my $ok = GetOptions
+    (
+     'fs_host=s'     => \$fs_host,
+     'fs_port=s'     => \$fs_port,
+     'fs_password=s' => \$fs_password,
+     'cid=s'         => \$callerid,
+     'dest=s'        => \$dest,
+     'msg=s'         => \$msgtext,
+     'profile=s'     => \$profile,
+     'verbose'       => \$verbose,
+     'help'          => \$help_needed,
+    );
+
+
+if( not $ok or $help_needed or not defined($dest) or not defined($msgtext) )
+{
+    print STDERR "Usage: $0 --dest=12345 --msg=\"Hello world\" ...\n",
+    "Options:\n",
+    "  --fs_host=HOST    \[$fs_host\] FreeSWITCH host\n",
+    "  --fs_port=PORT    \[$fs_port\] FreeSWITCH ESL port\n",
+    "  --fs_password=PW  \[$fs_password\] FreeSWITCH ESL password\n",
+    "  --cid=NUMBER      \[$callerid\] caller ID\n",
+    "  --dest=NUMBER\@DOMAIN  destination number\n",
+    "  --msg=TEXT        message text\n",
+    "  --profile=NAME    \[$profile\] SIP profile\n",
+    "  --verbose         print extra info to STDERR\n",
+    "  --help            this help message\n";
+    exit 1;
+}
+
+
+
+my $esl = new ESL::ESLconnection($fs_host,
+                                 sprintf('%d', $fs_port),
+                                 $fs_password);
+
+$esl->connected() or die("Cannot connect to FreeSWITCH");
+info("Connected to $fs_host:$fs_port");
+
+my $e = new ESL::ESLevent("custom", "SMS::SEND_MESSAGE");
+$e->addHeader("to", $dest);
+$e->addHeader("from", $callerid);
+$e->addHeader("sip_profile", "internal");
+$e->addHeader("dest_proto", "sip");
+$e->addBody($msgtext);
+$esl->sendEvent($e);
+
+
+$esl->disconnect();
+info("Finished");
+
+exit($ok?0:1);
+           
+
+
+sub printlog
+{
+    my ($time_epoch, $time_hires) = Time::HiRes::gettimeofday();
+    print STDERR
+        sprintf("%s.%.6d: ",
+                POSIX::strftime('%Y-%m-%d %H:%M:%S',
+                                localtime($time_epoch)),
+                $time_hires),
+        @_, "\n";
+}
+    
+sub info
+{
+    if( $verbose )
+    {
+        printlog(@_);
+    }
+}
+
+sub err
+{
+    printlog('ERROR: ', @_);
+}
+    
